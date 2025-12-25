@@ -13,12 +13,24 @@
     <ClCompile Include="EngineMath.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="FbxHelper.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ItpMesh.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="VertexFormat.h">
       <Filter>Source Files</Filter>
     </ClInclude>
     <ClInclude Include="EngineMath.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="FbxHelper.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ItpMesh.h">
       <Filter>Source Files</Filter>
     </ClInclude>
   </ItemGroup>

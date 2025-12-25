@@ -4,10 +4,9 @@
 // Requires Autodesk FBX SDK installed and linked (libfbxsdk.lib).
 
 #include "VertexFormat.h"
-#include <fbxsdk.h>
+#include "FbxHelper.h"
+#include "ItpMesh.h"
 #include <array>
-#include <iostream>
-#include <fstream>
 #include <iomanip>
 #include <string>
 #include <vector>
@@ -15,117 +14,12 @@
 
 static bool s_doBlendShapes = true;
 
-struct VertexFormat
-{
-    bool hasNormal = false;
-    bool hasTan = false;
-    bool hasUV = false;
-};
 
-struct BlendShape
-{
-    std::string name;                 // channel name (and target index when multiple targets)
-    VertexFormat format;
-    std::vector<VertexPosNormTan> deltas;      // per-control-point delta (target - base). size == mesh->GetControlPointsCount()
-};
-
-struct Mesh
-{
-    struct Triangle {
-        uint32_t index[3];
-    };
-    std::string name;
-    VertexFormat format;
-    std::vector<VertexPosNormTanUV> verts;
-    std::vector<Triangle> indices; // assuming triangles
-
-    // new: blendshape targets
-    std::vector<BlendShape> blendShapes;
-};
-
-// Helper to fetch normal for a polygon-vertex
-static bool GetNormalAt(FbxMesh* mesh, int polyIndex, int vertIndex, FbxVector4& outNormal)
-{
-    if (!mesh) return false;
-    fbxsdk::FbxGeometryElementNormal* elemNormal = mesh->GetElementNormal(0);
-    if (!elemNormal) return false;
-
-    if (elemNormal->GetMappingMode() == FbxGeometryElement::eByControlPoint)
-    {
-        int controlPointIndex = mesh->GetPolygonVertex(polyIndex, vertIndex);
-        int index = (elemNormal->GetReferenceMode() == FbxGeometryElement::eDirect) ?
-            controlPointIndex :
-            elemNormal->GetIndexArray().GetAt(controlPointIndex);
-        outNormal = elemNormal->GetDirectArray().GetAt(index);
-        return true;
-    }
-    else if (elemNormal->GetMappingMode() == FbxGeometryElement::eByPolygonVertex)
-    {
-        int indexByPolygonVertex = mesh->GetPolygonVertexIndex(polyIndex) + vertIndex;
-        int index = (elemNormal->GetReferenceMode() == FbxGeometryElement::eDirect) ?
-            indexByPolygonVertex :
-            elemNormal->GetIndexArray().GetAt(indexByPolygonVertex);
-        outNormal = elemNormal->GetDirectArray().GetAt(index);
-        return true;
-    }
-    // other mapping modes possible, not handled here
-    return false;
-}
-
-// Helper to fetch tangent for a polygon-vertex
-static bool GetTangentAt(FbxMesh* mesh, int polyIndex, int vertIndex, FbxVector4& outTangent)
-{
-    if (!mesh) return false;
-    fbxsdk::FbxGeometryElementTangent* elemTangent = mesh->GetElementTangent(0);
-    if (!elemTangent) return false;
-
-    if (elemTangent->GetMappingMode() == FbxGeometryElement::eByControlPoint)
-    {
-        int controlPointIndex = mesh->GetPolygonVertex(polyIndex, vertIndex);
-        int index = (elemTangent->GetReferenceMode() == FbxGeometryElement::eDirect) ?
-            controlPointIndex :
-            elemTangent->GetIndexArray().GetAt(controlPointIndex);
-        outTangent = elemTangent->GetDirectArray().GetAt(index);
-        return true;
-    }
-    else if (elemTangent->GetMappingMode() == FbxGeometryElement::eByPolygonVertex)
-    {
-        int indexByPolygonVertex = mesh->GetPolygonVertexIndex(polyIndex) + vertIndex;
-        int index = (elemTangent->GetReferenceMode() == FbxGeometryElement::eDirect) ?
-            indexByPolygonVertex :
-            elemTangent->GetIndexArray().GetAt(indexByPolygonVertex);
-        outTangent = elemTangent->GetDirectArray().GetAt(index);
-        return true;
-    }
-    // other mapping modes possible, not handled here
-    return false;
-}
-
-// Helper to fetch UV for a polygon-vertex
-static bool GetUVAt(FbxMesh* mesh, int polyIndex, int vertIndex, FbxVector2& outUV, const char* uvName = nullptr)
-{
-    if (!mesh) return false;
-    FbxStringList uvSetNameList;
-    mesh->GetUVSetNames(uvSetNameList);
-    if (uvSetNameList.GetCount() == 0) return false;
-
-    const char* name = uvName;
-    if (!name) name = uvSetNameList.GetStringAt(0);
-
-    bool unmapped;
-    if (mesh->GetPolygonVertexUV(polyIndex, vertIndex, name, outUV, unmapped))
-    {
-        if (unmapped) return false;
-        return true;
-    }
-    return false;
-}
-
-// New function: Read blendshapes (blend shape deformers) from an FbxMesh.
+// Read blendshapes (blend shape deformers) from an FbxMesh.
 // For each blendshape channel + each target shape, compute per-control-point deltas
 // (targetPosition - basePosition) and also compute per-control-point normals and tangents
 // for the target by re-evaluating triangle normals/tangents using the target positions.
-static void ReadBlendShapes(FbxMesh* mesh, Mesh* out)
+static void ReadBlendShapes(FbxMesh* mesh, ItpMesh::Mesh* out)
 {
     if (!mesh || !out)
         return;
@@ -134,8 +28,7 @@ static void ReadBlendShapes(FbxMesh* mesh, Mesh* out)
     if (deformerCount == 0)
         return;
 
-    // base control points (original mesh positions)
-    FbxVector4* baseControlPoints = mesh->GetControlPoints();
+    // how many vertices in the base mesh
     int baseCount = mesh->GetControlPointsCount();
     if (baseCount == 0)
         return;
@@ -171,7 +64,7 @@ static void ReadBlendShapes(FbxMesh* mesh, Mesh* out)
                     continue;
                 }
 
-                BlendShape bs;
+                ItpMesh::BlendShape bs;
                 bs.name = std::string(channel->GetName());
                 if (targetCount > 1)
                     bs.name += "_target" + std::to_string(t);
@@ -225,7 +118,7 @@ static void ReadBlendShapes(FbxMesh* mesh, Mesh* out)
     } // deformer
 }
 
-static void ProcessMeshToItp(FbxMesh* mesh, Mesh* out, int index)
+static void ProcessMeshToItp(FbxMesh* mesh, ItpMesh::Mesh* out, int index)
 {
     if (!mesh)
         return;
@@ -254,9 +147,9 @@ static void ProcessMeshToItp(FbxMesh* mesh, Mesh* out, int index)
 
             FbxVector4 pos = mesh->GetControlPointAt(ctrlPointIndex);
 
-            FbxVector4 normal; bool hasNormal = GetNormalAt(mesh, p, v, normal);
-            FbxVector2 uv; bool hasUV = GetUVAt(mesh, p, v, uv, nullptr);
-            FbxVector4 tangent; bool hasTangent = GetTangentAt(mesh, p, v, tangent);
+            FbxVector4 normal; bool hasNormal = FbxHelper::GetNormalAt(mesh, p, v, normal);
+            FbxVector2 uv; bool hasUV = FbxHelper::GetUVAt(mesh, p, v, uv, nullptr);
+            FbxVector4 tangent; bool hasTangent = FbxHelper::GetTangentAt(mesh, p, v, tangent);
 
             out->verts[ctrlPointIndex].pos = Vector3(static_cast<float>(pos[0]), static_cast<float>(pos[1]), static_cast<float>(pos[2]));
             if (hasNormal)
@@ -294,170 +187,9 @@ static void ProcessMeshToItp(FbxMesh* mesh, Mesh* out, int index)
     }
 }
 
-static std::string Indent(int indent)
-{
-    std::string indentStr = "";
-    for (int i = 0; i < indent; ++i)
-    {
-        indentStr += "\t";
-    }
-    return indentStr;
-}
-
-static void WriteFormatToJson(const VertexFormat& format, int indent, std::ofstream& ofs)
-{
-    std::string in = Indent(indent);
-    ofs << in << "\"vertexformat\": [\n";
-    ofs << in << "\t{\n";
-    ofs << in << "\t\t\"name\": \"position\",\n";
-    ofs << in << "\t\t\"type\" : \"float\",\n";
-    ofs << in << "\t\t\"count\" : 3\n";
-    ofs << in << "\t}";
-    if (format.hasNormal)
-    {
-        ofs << ",\n";
-        ofs << in << "\t{\n";
-        ofs << in << "\t\t\"name\": \"normal\",\n";
-        ofs << in << "\t\t\"type\": \"float\",\n";
-        ofs << in << "\t\t\"count\": 3\n";
-        ofs << in << "\t}";
-    }
-    if (format.hasTan)
-    {
-        ofs << ",\n";
-        ofs << in << "\t{\n";
-        ofs << in << "\t\t\"name\": \"tangent\",\n";
-        ofs << in << "\t\t\"type\": \"float\",\n";
-        ofs << in << "\t\t\"count\": 3\n";
-        ofs << in << "\t}";
-    }
-    if (format.hasUV)
-    {
-        ofs << ",\n";
-        ofs << in << "\t{\n";
-        ofs << in << "\t\t\"name\": \"texcoord\",\n";
-        ofs << in << "\t\t\"type\": \"float\",\n";
-        ofs << in << "\t\t\"count\": 2\n";
-        ofs << in << "\t}";
-    }
-    ofs << "\n" << in << "], \n";
-}
-
-static void WriteVertToJson(const VertexFormat& format, const VertexPosNormTanUV& vert, std::ofstream& ofs)
-{
-    ofs << "\t\t[ ";
-    ofs << vert.pos.x << ", " << vert.pos.y << ", " << vert.pos.z;
-    if (format.hasNormal)
-    {
-        ofs << ", " << vert.norm.x << ", " << vert.norm.y << ", " << vert.norm.z;
-    }
-    if (format.hasTan)
-    {
-        ofs << ", " << vert.tan.x << ", " << vert.tan.y << ", " << vert.tan.z;
-    }
-    if (format.hasUV)
-    {
-        ofs << ", " << vert.uv.x << ", " << vert.uv.y;
-    }
-
-    ofs << " ]";
-}
-
-static void WriteVertsToJson(const Mesh* mesh, std::ofstream& ofs)
-{
-    ofs << "\t\"vertices\": [\n";
-    WriteVertToJson(mesh->format, mesh->verts[0], ofs);
-    for (size_t i = 1; i < mesh->verts.size(); ++i)
-    {
-        ofs << ",\n";
-        WriteVertToJson(mesh->format, mesh->verts[i], ofs);
-    }
-    ofs << "\n\t],\n";
-}
-
-static void WriteTriToJson(const Mesh::Triangle& tri, std::ofstream& ofs)
-{
-    ofs << "\t\t[ " << tri.index[0] << ", " << tri.index[1] << ", "
-        << tri.index[2] << " ]";
-}
-
-static void WriteIndicesToJson(const Mesh* mesh, std::ofstream& ofs)
-{
-    ofs << "\t\"indices\": [\n";
-    WriteTriToJson(mesh->indices[0], ofs);
-    for (size_t i = 1; i < mesh->indices.size(); ++i)
-    {
-        ofs << ",\n";
-        WriteTriToJson(mesh->indices[i], ofs);
-    }
-    ofs << "\n\t]";
-}
-
-static void WriteDeltaToJson(const VertexFormat& format, const VertexPosNormTan& vert, std::ofstream& ofs)
-{
-    ofs << "\t\t[ ";
-    ofs << vert.pos.x << ", " << vert.pos.y << ", " << vert.pos.z;
-    if (format.hasNormal)
-    {
-        ofs << ", " << vert.norm.x << ", " << vert.norm.y << ", " << vert.norm.z;
-    }
-    if (format.hasTan)
-    {
-        ofs << ", " << vert.tan.x << ", " << vert.tan.y << ", " << vert.tan.z;
-    }
-
-    ofs << " ]";
-}
-
-static void WriteDeltasToJson(const BlendShape& bs, std::ofstream& ofs)
-{
-    ofs << "\t\"deltas\": [\n";
-    if (!bs.deltas.empty())
-    {
-        WriteDeltaToJson(bs.format, bs.deltas[0], ofs);
-        for (size_t i = 1; i < bs.deltas.size(); ++i)
-        {
-            ofs << ",\n";
-            WriteDeltaToJson(bs.format, bs.deltas[i], ofs);
-        }
-    }
-    ofs << "\n\t]";
-}
-
-static void WriteBlendToJson(const BlendShape& bs, std::ofstream& ofs)
-{
-    ofs << "{\n";
-    ofs << "\t\"metadata\": {\n";
-    ofs << "\t\t\"type\": \"itpblend\",\n";
-    ofs << "\t\t\"version\" : 1\n";
-    ofs << "\t},\n";
-
-    ofs << "\t\"name\": \"" << bs.name << "\",\n";
-    WriteFormatToJson(bs.format, 1, ofs);
-    // deltas
-    WriteDeltasToJson(bs, ofs);
-
-    ofs << "\n}\n";
-}
-
-static void WriteMeshToJson(const Mesh* mesh, std::ofstream& ofs)
-{
-    ofs << "{\n";
-    ofs << "\t\"metadata\": {\n";
-    ofs << "\t\t\"type\": \"itpmesh\",\n";
-    ofs << "\t\t\"version\" : 3\n";
-    ofs << "\t},\n";
-    ofs << "\t\"material\" : \"Assets/Materials/" << mesh->name << ".itpmat\",\n";
-    WriteFormatToJson(mesh->format, 1, ofs);
-    WriteVertsToJson(mesh, ofs);
-    WriteIndicesToJson(mesh, ofs);
-
-    ofs << "\n}\n";
-}
-
 static void WriteMesh(FbxMesh* mesh, int index)
 {
-    Mesh itpMesh;
+    ItpMesh::Mesh itpMesh;
     ProcessMeshToItp(mesh, &itpMesh, index);
     std::cout << itpMesh.name << "\n";
 
@@ -471,7 +203,7 @@ static void WriteMesh(FbxMesh* mesh, int index)
         else
         {
             ofs << std::showpoint;
-            WriteMeshToJson(&itpMesh, ofs);
+            itpMesh.WriteToJson(ofs);
             ofs.close();
         }
     }
@@ -493,7 +225,7 @@ static void WriteMesh(FbxMesh* mesh, int index)
             else
             {
                 ofs << std::showpoint;
-                WriteBlendToJson(bs, ofs);
+                bs.WriteToJson(ofs);
                 ofs.close();
             }
         }

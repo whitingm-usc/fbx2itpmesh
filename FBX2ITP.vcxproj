@@ -137,9 +137,13 @@
   <ItemGroup>
     <ClCompile Include="EngineMath.cpp" />
     <ClCompile Include="FBX2ITP.cpp" />
+    <ClCompile Include="FbxHelper.cpp" />
+    <ClCompile Include="ItpMesh.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="EngineMath.h" />
+    <ClInclude Include="FbxHelper.h" />
+    <ClInclude Include="ItpMesh.h" />
     <ClInclude Include="VertexFormat.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
