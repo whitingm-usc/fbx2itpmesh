@@ -13,7 +13,7 @@
 #include <vector>
 #include <cmath>
 
-static bool s_doBlendShapes = false;
+static bool s_doBlendShapes = true;
 
 struct VertexFormat
 {
@@ -343,19 +343,19 @@ static void WriteFormatToJson(const VertexFormat& format, int indent, std::ofstr
     ofs << "\n" << in << "], \n";
 }
 
-static void WriteVertToJson(const Mesh* mesh, const VertexPosNormTanUV& vert, std::ofstream& ofs)
+static void WriteVertToJson(const VertexFormat& format, const VertexPosNormTanUV& vert, std::ofstream& ofs)
 {
     ofs << "\t\t[ ";
     ofs << vert.pos.x << ", " << vert.pos.y << ", " << vert.pos.z;
-    if (mesh->format.hasNormal)
+    if (format.hasNormal)
     {
         ofs << ", " << vert.norm.x << ", " << vert.norm.y << ", " << vert.norm.z;
     }
-    if (mesh->format.hasTan)
+    if (format.hasTan)
     {
         ofs << ", " << vert.tan.x << ", " << vert.tan.y << ", " << vert.tan.z;
     }
-    if (mesh->format.hasUV)
+    if (format.hasUV)
     {
         ofs << ", " << vert.uv.x << ", " << vert.uv.y;
     }
@@ -366,11 +366,11 @@ static void WriteVertToJson(const Mesh* mesh, const VertexPosNormTanUV& vert, st
 static void WriteVertsToJson(const Mesh* mesh, std::ofstream& ofs)
 {
     ofs << "\t\"vertices\": [\n";
-    WriteVertToJson(mesh, mesh->verts[0], ofs);
+    WriteVertToJson(mesh->format, mesh->verts[0], ofs);
     for (size_t i = 1; i < mesh->verts.size(); ++i)
     {
         ofs << ",\n";
-        WriteVertToJson(mesh, mesh->verts[i], ofs);
+        WriteVertToJson(mesh->format, mesh->verts[i], ofs);
     }
     ofs << "\n\t],\n";
 }
@@ -393,15 +393,15 @@ static void WriteIndicesToJson(const Mesh* mesh, std::ofstream& ofs)
     ofs << "\n\t]";
 }
 
-static void WriteDeltaToJson(const BlendShape& bs, const VertexPosNormTan& vert, std::ofstream& ofs)
+static void WriteDeltaToJson(const VertexFormat& format, const VertexPosNormTan& vert, std::ofstream& ofs)
 {
-    ofs << "\t\t\t\t[ ";
+    ofs << "\t\t[ ";
     ofs << vert.pos.x << ", " << vert.pos.y << ", " << vert.pos.z;
-    if (bs.format.hasNormal)
+    if (format.hasNormal)
     {
         ofs << ", " << vert.norm.x << ", " << vert.norm.y << ", " << vert.norm.z;
     }
-    if (bs.format.hasTan)
+    if (format.hasTan)
     {
         ofs << ", " << vert.tan.x << ", " << vert.tan.y << ", " << vert.tan.z;
     }
@@ -409,19 +409,35 @@ static void WriteDeltaToJson(const BlendShape& bs, const VertexPosNormTan& vert,
     ofs << " ]";
 }
 
-static void WriteDeltasToJson(const Mesh* mesh, const BlendShape& bs, std::ofstream& ofs)
+static void WriteDeltasToJson(const BlendShape& bs, std::ofstream& ofs)
 {
-    ofs << "\t\t\t\"deltas\": [\n";
+    ofs << "\t\"deltas\": [\n";
     if (!bs.deltas.empty())
     {
-        WriteDeltaToJson(bs, bs.deltas[0], ofs);
+        WriteDeltaToJson(bs.format, bs.deltas[0], ofs);
         for (size_t i = 1; i < bs.deltas.size(); ++i)
         {
             ofs << ",\n";
-            WriteDeltaToJson(bs, bs.deltas[i], ofs);
+            WriteDeltaToJson(bs.format, bs.deltas[i], ofs);
         }
     }
-    ofs << "\n\t\t\t]\n";
+    ofs << "\n\t]";
+}
+
+static void WriteBlendToJson(const BlendShape& bs, std::ofstream& ofs)
+{
+    ofs << "{\n";
+    ofs << "\t\"metadata\": {\n";
+    ofs << "\t\t\"type\": \"itpblend\",\n";
+    ofs << "\t\t\"version\" : 1\n";
+    ofs << "\t},\n";
+
+    ofs << "\t\"name\": \"" << bs.name << "\",\n";
+    WriteFormatToJson(bs.format, 1, ofs);
+    // deltas
+    WriteDeltasToJson(bs, ofs);
+
+    ofs << "\n}\n";
 }
 
 static void WriteMeshToJson(const Mesh* mesh, std::ofstream& ofs)
@@ -436,27 +452,6 @@ static void WriteMeshToJson(const Mesh* mesh, std::ofstream& ofs)
     WriteVertsToJson(mesh, ofs);
     WriteIndicesToJson(mesh, ofs);
 
-    if (s_doBlendShapes)
-    {   // write blendshapes
-        if (!mesh->blendShapes.empty())
-        {
-            ofs << ",\n\t\"blendshapes\": [\n";
-            for (size_t b = 0; b < mesh->blendShapes.size(); ++b)
-            {
-                const BlendShape& bs = mesh->blendShapes[b];
-                ofs << "\t\t{\n";
-                ofs << "\t\t\t\"name\": \"" << bs.name << "\",\n";
-                WriteFormatToJson(bs.format, 3, ofs);
-                // deltas
-                WriteDeltasToJson(mesh, bs, ofs);
-
-                ofs << "\t\t}";
-                if (b + 1 < mesh->blendShapes.size()) ofs << ",\n";
-            }
-            ofs << "\n\t]";
-        }
-    }
-
     ofs << "\n}\n";
 }
 
@@ -466,18 +461,42 @@ static void WriteMesh(FbxMesh* mesh, int index)
     ProcessMeshToItp(mesh, &itpMesh, index);
     std::cout << itpMesh.name << "\n";
 
-    // Open output file
-    std::string outputPath = itpMesh.name + ".itpmesh3";
-    std::ofstream ofs(outputPath, std::ofstream::out | std::ofstream::trunc);
-    if (!ofs.is_open())
-    {
-        std::cerr << "Failed to open output file: " << outputPath << "\n";
+    {   // Open output file
+        std::string outputPath = itpMesh.name + ".itpmesh3";
+        std::ofstream ofs(outputPath, std::ofstream::out | std::ofstream::trunc);
+        if (!ofs.is_open())
+        {
+            std::cerr << "Failed to open output file: " << outputPath << "\n";
+        }
+        else
+        {
+            ofs << std::showpoint;
+            WriteMeshToJson(&itpMesh, ofs);
+            ofs.close();
+        }
     }
-    else
+
+    if (s_doBlendShapes && !itpMesh.blendShapes.empty())
     {
-        ofs << std::showpoint;
-        WriteMeshToJson(&itpMesh, ofs);
-        ofs.close();
+        std::cout << "  BlendShapes:\n";
+        for (const auto& bs : itpMesh.blendShapes)
+        {
+            std::cout << "    " << bs.name << " (deltas: " << bs.deltas.size() << ")\n";
+
+            // Open output file
+            std::string outputPath = bs.name + ".itpblend";
+            std::ofstream ofs(outputPath, std::ofstream::out | std::ofstream::trunc);
+            if (!ofs.is_open())
+            {
+                std::cerr << "Failed to open output file: " << outputPath << "\n";
+            }
+            else
+            {
+                ofs << std::showpoint;
+                WriteBlendToJson(bs, ofs);
+                ofs.close();
+            }
+        }
     }
 }
 
