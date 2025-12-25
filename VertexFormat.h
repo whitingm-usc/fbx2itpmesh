@@ -51,3 +51,10 @@ struct VertexPosNormTanUV
     Vector3 tan;
     Vector2 uv;
 };
+
+struct VertexPosNormTan
+{
+    Vector3 pos;
+    Vector3 norm;
+    Vector3 tan;
+};
