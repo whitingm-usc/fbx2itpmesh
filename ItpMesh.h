@@ -1,9 +1,10 @@
 #pragma once
 #include "VertexFormat.h"
-#include <string>
-#include <vector>
-#include <iostream>
 #include <fstream>
+#include <iostream>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 class ItpMesh
 {
@@ -42,6 +43,8 @@ public:
         std::vector<Triangle> indices;          // assuming triangles
 
         std::vector<BlendShape> blendShapes;    // blendshape targets
+
+        std::unordered_map<uint32_t, std::vector<uint32_t>> vertexMap; // original index to new indices
 
         void WriteToJson(std::ofstream& ofs) const;
         void WriteVertToJson(const VertexPosNormTanUV& vert, std::ofstream& ofs) const;

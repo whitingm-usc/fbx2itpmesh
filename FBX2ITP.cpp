@@ -83,29 +83,38 @@ static void ReadBlendShapes(FbxMesh* mesh, ItpMesh::Mesh* out)
                         && (elemTangent->GetMappingMode() == FbxGeometryElement::eByControlPoint);
                 }
 
-                bs.deltas.resize(baseCount);
+                bs.deltas.resize(static_cast<size_t>(out->verts.size()));
                 for (int i = 0; i < baseCount; ++i)
                 {
+                    uint32_t baseIndex = out->vertexMap[static_cast<uint32_t>(i)][0];
+                    VertexPosNormTanUV& baseVert = out->verts[baseIndex];
+                    VertexPosNormTan vert;
                     float dx = static_cast<float>(shapeControlPoints[i][0]);
                     float dy = static_cast<float>(shapeControlPoints[i][1]);
                     float dz = static_cast<float>(shapeControlPoints[i][2]);
-                    bs.deltas[i].pos = Vector3(dx, dy, dz) - out->verts[i].pos;
+                    vert.pos = Vector3(dx, dy, dz) - baseVert.pos;
 
                     if (bs.format.hasNormal)
                     {
                         int idx = (elemNormal->GetReferenceMode() == FbxGeometryElement::eDirect) ?
                             i : elemNormal->GetIndexArray().GetAt(i);
                         FbxVector4 n = elemNormal->GetDirectArray().GetAt(idx);
-                        bs.deltas[i].norm = Vector3(static_cast<float>(n[0]), static_cast<float>(n[1]), static_cast<float>(n[2]));
-                        bs.deltas[i].norm -= out->verts[i].norm;
+                        vert.norm = Vector3(static_cast<float>(n[0]), static_cast<float>(n[1]), static_cast<float>(n[2]));
+                        vert.norm -= baseVert.norm;
                     }
                     if (bs.format.hasTan)
                     {
                         int idx = (elemTangent->GetReferenceMode() == FbxGeometryElement::eDirect) ?
                             i : elemTangent->GetIndexArray().GetAt(i);
                         FbxVector4 n = elemTangent->GetDirectArray().GetAt(idx);
-                        bs.deltas[i].tan = Vector3(static_cast<float>(n[0]), static_cast<float>(n[1]), static_cast<float>(n[2]));
-                        bs.deltas[i].tan -= out->verts[i].tan;
+                        vert.tan = Vector3(static_cast<float>(n[0]), static_cast<float>(n[1]), static_cast<float>(n[2]));
+                        vert.tan -= baseVert.tan;
+                    }
+
+                    for (uint32_t vi : out->vertexMap[static_cast<uint32_t>(i)])
+                    {
+                        // For each duplicated vertex, add the same delta
+                        bs.deltas[vi] = vert;
                     }
                 }
 
@@ -178,6 +187,7 @@ static void ProcessMeshToItp(FbxMesh* mesh, ItpMesh::Mesh* out, int index)
                 index = vertexMap.size();
                 vertexMap[vert] = index;
                 out->verts.emplace_back(vert);
+                out->vertexMap[static_cast<uint32_t>(ctrlPointIndex)].push_back(static_cast<uint32_t>(index));
             }
             // reverse the winding order
             out->indices[p].index[2 - v] = static_cast<uint32_t>(index);
