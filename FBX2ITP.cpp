@@ -7,10 +7,11 @@
 #include "FbxHelper.h"
 #include "ItpMesh.h"
 #include <array>
+#include <cmath>
 #include <iomanip>
 #include <string>
+#include <unordered_map>
 #include <vector>
-#include <cmath>
 
 static bool s_doBlendShapes = true;
 
@@ -134,7 +135,7 @@ static void ProcessMeshToItp(FbxMesh* mesh, ItpMesh::Mesh* out, int index)
 
     int polygonCount = mesh->GetPolygonCount();
     out->indices.resize(polygonCount);
-    out->verts.resize(mesh->GetControlPointsCount());
+    std::unordered_map<VertexPosNormTanUV, size_t> vertexMap;
     for (int p = 0; p < polygonCount; ++p)
     {
         int polySize = mesh->GetPolygonSize(p);
@@ -142,43 +143,45 @@ static void ProcessMeshToItp(FbxMesh* mesh, ItpMesh::Mesh* out, int index)
         {
             int ctrlPointIndex = mesh->GetPolygonVertex(p, v);
 
-            // reverse the winding order
-            out->indices[p].index[2 - v] = ctrlPointIndex;
-
+            VertexPosNormTanUV vert;
             FbxVector4 pos = mesh->GetControlPointAt(ctrlPointIndex);
 
             FbxVector4 normal; bool hasNormal = FbxHelper::GetNormalAt(mesh, p, v, normal);
             FbxVector2 uv; bool hasUV = FbxHelper::GetUVAt(mesh, p, v, uv, nullptr);
             FbxVector4 tangent; bool hasTangent = FbxHelper::GetTangentAt(mesh, p, v, tangent);
 
-            out->verts[ctrlPointIndex].pos = Vector3(static_cast<float>(pos[0]), static_cast<float>(pos[1]), static_cast<float>(pos[2]));
+            vert.pos = Vector3(static_cast<float>(pos[0]), static_cast<float>(pos[1]), static_cast<float>(pos[2]));
             if (hasNormal)
-                out->verts[ctrlPointIndex].norm = Vector3(static_cast<float>(normal[0]), static_cast<float>(normal[1]), static_cast<float>(normal[2]));
+                vert.norm = Vector3(static_cast<float>(normal[0]), static_cast<float>(normal[1]), static_cast<float>(normal[2]));
             else
-                out->verts[ctrlPointIndex].norm = Vector3(0.0f, 0.0f, 0.0f); // or compute later
+                vert.norm = Vector3(0.0f, 0.0f, 0.0f);
             if (hasTangent)
-                out->verts[ctrlPointIndex].tan = Vector3(static_cast<float>(tangent[0]), static_cast<float>(tangent[1]), static_cast<float>(tangent[2]));
+                vert.tan = Vector3(static_cast<float>(tangent[0]), static_cast<float>(tangent[1]), static_cast<float>(tangent[2]));
             else
-                out->verts[ctrlPointIndex].tan = Vector3(0.0f, 0.0f, 0.0f); // or compute later
+                vert.tan = Vector3(0.0f, 0.0f, 0.0f);
             if (hasUV)
             {
                 uv[1] = 1.0 - uv[1]; // flip V
-                out->verts[ctrlPointIndex].uv = Vector2(static_cast<float>(uv[0]), static_cast<float>(uv[1]));
+                vert.uv = Vector2(static_cast<float>(uv[0]), static_cast<float>(uv[1]));
             }
             else
-                out->verts[ctrlPointIndex].uv = Vector2(0.0f, 0.0f);
-        }
-    }
+                vert.uv = Vector2(0.0f, 0.0f);
 
-    out->indices.reserve(polygonCount); // assuming triangles
-    for (int p = 0; p < polygonCount; ++p)
-    {
-        uint32_t tri[3];
-        for (int v = 0; v < 3; ++v)
-        {
-            tri[v] = mesh->GetPolygonVertex(p, v);
+            size_t index = 0;
+            auto inMap = vertexMap.find(vert);
+            if (inMap != vertexMap.end())
+            {
+                index = inMap->second;
+            }
+            else
+            {
+                index = vertexMap.size();
+                vertexMap[vert] = index;
+                out->verts.emplace_back(vert);
+            }
+            // reverse the winding order
+            out->indices[p].index[2 - v] = static_cast<uint32_t>(index);
         }
-        out->indices.push_back({ tri[0], tri[1], tri[2] });
     }
 
     if (s_doBlendShapes)

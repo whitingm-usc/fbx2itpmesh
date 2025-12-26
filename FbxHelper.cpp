@@ -3,9 +3,11 @@
 // Helper to fetch normal for a polygon-vertex
 /*static*/ bool FbxHelper::GetNormalAt(FbxMesh* mesh, int polyIndex, int vertIndex, FbxVector4& outNormal)
 {
-    if (!mesh) return false;
+    if (!mesh)
+        return false;
     fbxsdk::FbxGeometryElementNormal* elemNormal = mesh->GetElementNormal(0);
-    if (!elemNormal) return false;
+    if (!elemNormal)
+        return false;
 
     if (elemNormal->GetMappingMode() == FbxGeometryElement::eByControlPoint)
     {
@@ -32,9 +34,11 @@
 // Helper to fetch tangent for a polygon-vertex
 /*static*/ bool FbxHelper::GetTangentAt(FbxMesh* mesh, int polyIndex, int vertIndex, FbxVector4& outTangent)
 {
-    if (!mesh) return false;
+    if (!mesh)
+        return false;
     fbxsdk::FbxGeometryElementTangent* elemTangent = mesh->GetElementTangent(0);
-    if (!elemTangent) return false;
+    if (!elemTangent)
+        return false;
 
     if (elemTangent->GetMappingMode() == FbxGeometryElement::eByControlPoint)
     {
@@ -61,18 +65,22 @@
 // Helper to fetch UV for a polygon-vertex
 /*static*/ bool FbxHelper::GetUVAt(FbxMesh* mesh, int polyIndex, int vertIndex, FbxVector2& outUV, const char* uvName)
 {
-    if (!mesh) return false;
+    if (!mesh)
+        return false;
     FbxStringList uvSetNameList;
     mesh->GetUVSetNames(uvSetNameList);
-    if (uvSetNameList.GetCount() == 0) return false;
+    if (uvSetNameList.GetCount() == 0)
+        return false;
 
     const char* name = uvName;
-    if (!name) name = uvSetNameList.GetStringAt(0);
+    if (!name)
+        name = uvSetNameList.GetStringAt(0);
 
     bool unmapped;
     if (mesh->GetPolygonVertexUV(polyIndex, vertIndex, name, outUV, unmapped))
     {
-        if (unmapped) return false;
+        if (unmapped)
+            return false;
         return true;
     }
     return false;
