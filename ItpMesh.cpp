@@ -37,6 +37,20 @@ void ItpMesh::VertexFormat::WriteToJson(std::ofstream& ofs, int indent) const
         ofs << in << "\t\t\"count\": 3\n";
         ofs << in << "\t}";
     }
+    if (hasSkin)
+    {
+        ofs << ",\n";
+        ofs << in << "\t{\n";
+        ofs << in << "\t\t\"name\": \"bones\",\n";
+        ofs << in << "\t\t\"type\": \"byte\",\n";
+        ofs << in << "\t\t\"count\": 4\n";
+        ofs << in << "\t},\n";
+        ofs << in << "\t{\n";
+        ofs << in << "\t\t\"name\": \"weights\",\n";
+        ofs << in << "\t\t\"type\": \"byte\",\n";
+        ofs << in << "\t\t\"count\": 4\n";
+        ofs << in << "\t}";
+    }
     if (hasUV)
     {
         ofs << ",\n";
@@ -49,7 +63,7 @@ void ItpMesh::VertexFormat::WriteToJson(std::ofstream& ofs, int indent) const
     ofs << "\n" << in << "], \n";
 }
 
-void ItpMesh::BlendShape::WriteDeltaToJson(const VertexPosNormTan& vert, std::ofstream& ofs) const
+void ItpMesh::BlendShape::WriteDeltaToJson(const VertexData& vert, std::ofstream& ofs) const
 {
     ofs << "\t\t[ ";
     ofs << vert.pos.x << ", " << vert.pos.y << ", " << vert.pos.z;
@@ -96,6 +110,21 @@ void ItpMesh::BlendShape::WriteToJson(std::ofstream& ofs) const
     ofs << "\n}\n";
 }
 
+void ItpMesh::Bone::WriteToJson(std::ofstream& ofs) const
+{
+    ofs << "\t\t{\n";
+    ofs << "\t\t\t\"name\": \"" << name << "\",\n";
+    ofs << "\t\t\t\"parentIndex\": " << parentIndex << ",\n";
+    ofs << "\t\t\t\"bindPose\": {\n";
+    ofs << "\t\t\t\t\"rot\": [ " << bindPose.rot.x << ", "
+        << bindPose.rot.y << ", " << bindPose.rot.z << ", "
+        << bindPose.rot.w << " ],\n";
+    ofs << "\t\t\t\t\"trans\": [ " << bindPose.trans.x << ", "
+        << bindPose.trans.y << ", " << bindPose.trans.z << " ]\n";
+    ofs << "\t\t\t}\n";
+    ofs << "\t\t}";
+}
+
 void ItpMesh::Mesh::Triangle::WriteToJson(std::ofstream& ofs) const
 {
     ofs << "\t\t[ " << index[0] << ", " << index[1] << ", "
@@ -117,7 +146,7 @@ void ItpMesh::Mesh::WriteToJson(std::ofstream& ofs) const
     ofs << "\n}\n";
 }
 
-void ItpMesh::Mesh::WriteVertToJson(const VertexPosNormTanUV& vert, std::ofstream& ofs) const
+void ItpMesh::Mesh::WriteVertToJson(const VertexData& vert, std::ofstream& ofs) const
 {
     ofs << "\t\t[ ";
     ofs << vert.pos.x << ", " << vert.pos.y << ", " << vert.pos.z;
@@ -128,6 +157,17 @@ void ItpMesh::Mesh::WriteVertToJson(const VertexPosNormTanUV& vert, std::ofstrea
     if (format.hasTan)
     {
         ofs << ", " << vert.tan.x << ", " << vert.tan.y << ", " << vert.tan.z;
+    }
+    if (format.hasSkin)
+    {
+        ofs << ", " << static_cast<uint32_t>(vert.bones[0]) << ", "
+            << static_cast<uint32_t>(vert.bones[1]) << ", "
+            << static_cast<uint32_t>(vert.bones[2]) << ", "
+            << static_cast<uint32_t>(vert.bones[3]) << ", "
+            << static_cast<uint32_t>(vert.weights[0]) << ", "
+            << static_cast<uint32_t>(vert.weights[1]) << ", "
+            << static_cast<uint32_t>(vert.weights[2]) << ", "
+            << static_cast<uint32_t>(vert.weights[3]);
     }
     if (format.hasUV)
     {
@@ -161,3 +201,24 @@ void ItpMesh::Mesh::WriteIndicesToJson(std::ofstream& ofs) const
     ofs << "\n\t]";
 }
 
+void ItpMesh::Mesh::WriteSkelToJson(std::ofstream& ofs) const
+{
+    ofs << "{\n";
+    ofs << "\t\"metadata\": {\n";
+    ofs << "\t\t\"type\": \"itpskel\",\n";
+    ofs << "\t\t\"version\": 1\n";
+    ofs << "\t},\n";
+    ofs << "\t\"bonecount\": " << bones.size() << ",\n";
+    ofs << "\t\"bones\": [\n";
+    if (!bones.empty())
+    {
+        bones[0].WriteToJson(ofs);
+        for (size_t i = 1; i < bones.size(); ++i)
+        {
+            ofs << ",\n";
+            bones[i].WriteToJson(ofs);
+        }
+    }
+    ofs << "\n\t]\n";
+    ofs << "}\n";
+}
