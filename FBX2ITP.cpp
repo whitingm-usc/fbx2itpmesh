@@ -138,7 +138,6 @@ static void ReadBlendShapes(FbxMesh* mesh, ItpMesh::Mesh* out)
 
 static void GetAnimBones(FbxMesh* mesh, 
     std::vector<FbxNode*>& boneNodes,
-    std::vector<FbxAMatrix>& boneBindMatrices,
     std::unordered_map<std::string, uint8_t>& boneNameToIndex,
     std::vector<std::vector<std::pair<uint8_t, float>>>& cpInfluences
     )
@@ -156,7 +155,6 @@ static void GetAnimBones(FbxMesh* mesh,
         std::string skelName = skelNode->GetName();
         boneNameToIndex[skelName] = static_cast<uint8_t>(i);
     }
-    boneBindMatrices.resize(boneNodes.size());
 
     // go thru all the deformers looking for skin deformers
     int skinDeformerCount = mesh->GetDeformerCount(FbxDeformer::eSkin);
@@ -191,11 +189,6 @@ static void GetAnimBones(FbxMesh* mesh,
             cluster->GetTransformLinkMatrix(linkBindMat); // link in bind pose
             cluster->GetTransformMatrix(meshBindMat);     // mesh in bind pose
 
-            // Convert link into mesh-local bind transform:
-            // localBind = linkBind * inverse(meshBind)
-//            FbxAMatrix localBind = linkBindMat * meshBindMat.Inverse();
-            //boneBindMatrices[boneIndex] = localBind;
-
             // get the bone indices and weights for this vertex
             int indexCount = cluster->GetControlPointIndicesCount();
             int* indices = cluster->GetControlPointIndices();
@@ -229,8 +222,7 @@ static bool ReadSkin(FbxMesh* mesh,
     std::unordered_map<std::string, uint8_t> boneNameToIndex;
     // Keep arrays for node pointers and bind matrices indexed by boneIndex
     std::vector<FbxNode*> boneNodes;
-    std::vector<FbxAMatrix> boneBindMatrices;
-    GetAnimBones(mesh, boneNodes, boneBindMatrices, boneNameToIndex, cpInfluences);
+    GetAnimBones(mesh, boneNodes, boneNameToIndex, cpInfluences);    
     size_t numBones = boneNodes.size();
 
     // Pack up to 4 strongest influences per vertex
@@ -280,9 +272,11 @@ static bool ReadSkin(FbxMesh* mesh,
         ctrlWeights[static_cast<size_t>(i)] = w;
     }
 
-    // Build outBones entries (name, parentIndex, bindPose) using boneBindMatrices
+    // Build outBones entries (name, parentIndex, bindPose)
     outBones.clear();
     outBones.resize(numBones);
+    std::vector<FbxAMatrix> boneBindMatrices;
+    boneBindMatrices.resize(numBones);
     for (uint32_t bi = 0; bi < numBones; ++bi)
     {
         ItpMesh::Bone bone;
@@ -310,17 +304,17 @@ static bool ReadSkin(FbxMesh* mesh,
 
             // To get the bone's local transform (relative to its parent) compute:
             // local = inverse(parentGlobal) * boneGlobal
-            FbxAMatrix boneGlobal = boneBindMatrices[bi] = node->EvaluateGlobalTransform();
+            boneBindMatrices[bi] = node->EvaluateGlobalTransform();
             FbxAMatrix localBind;
             if (bone.parentIndex >= 0 && static_cast<size_t>(bone.parentIndex) < boneBindMatrices.size())
             {
                 FbxAMatrix parentGlobal = boneBindMatrices[static_cast<size_t>(bone.parentIndex)];
-                localBind = parentGlobal.Inverse() * boneGlobal;
+                localBind = parentGlobal.Inverse() * boneBindMatrices[bi];
             }
             else
             {
                 // root bone: local == global (already in mesh-local)
-                localBind = boneGlobal;
+                localBind = boneBindMatrices[bi];
             }
 
             FbxVector4 t = localBind.GetT();
@@ -351,10 +345,10 @@ static void ProcessMeshToItp(FbxMesh* mesh, ItpMesh::Mesh* out, int index)
     out->name = node ? node->GetName() : "mesh_" + std::to_string(index);
 
     fbxsdk::FbxGeometryElementNormal* elemN = mesh->GetElementNormal(0);
-    fbxsdk::FbxGeometryElementUV* elemUV = mesh->GetElementUV(0); // may be nullptr
-    fbxsdk::FbxGeometryElementTangent* elemT = mesh->GetElementTangent(0);
     out->format.hasNormal = (elemN != nullptr);
+    fbxsdk::FbxGeometryElementUV* elemUV = mesh->GetElementUV(0);
     out->format.hasUV = (elemUV != nullptr);
+    fbxsdk::FbxGeometryElementTangent* elemT = mesh->GetElementTangent(0);
     out->format.hasTan = (elemT != nullptr);
 
     // Read skinning data
@@ -365,6 +359,8 @@ static void ProcessMeshToItp(FbxMesh* mesh, ItpMesh::Mesh* out, int index)
 
     int polygonCount = mesh->GetPolygonCount();
     out->indices.resize(polygonCount);
+    // create a map of unique vertices...
+    // if ALL the vertex data is identical, then we can share the vertex
     std::unordered_map<VertexData, size_t> vertexMap;
     for (int p = 0; p < polygonCount; ++p)
     {
@@ -375,10 +371,12 @@ static void ProcessMeshToItp(FbxMesh* mesh, ItpMesh::Mesh* out, int index)
 
             VertexData vert;
             FbxVector4 pos = mesh->GetControlPointAt(ctrlPointIndex);
-
-            FbxVector4 normal; bool hasNormal = FbxHelper::GetNormalAt(mesh, p, v, normal);
-            FbxVector2 uv; bool hasUV = FbxHelper::GetUVAt(mesh, p, v, uv, nullptr);
-            FbxVector4 tangent; bool hasTangent = FbxHelper::GetTangentAt(mesh, p, v, tangent);
+            FbxVector4 normal; 
+            bool hasNormal = FbxHelper::GetNormalAt(mesh, p, v, normal);
+            FbxVector2 uv;
+            bool hasUV = FbxHelper::GetUVAt(mesh, p, v, uv, nullptr);
+            FbxVector4 tangent;
+            bool hasTangent = FbxHelper::GetTangentAt(mesh, p, v, tangent);
 
             vert.pos = Vector3(static_cast<float>(pos[0]), static_cast<float>(pos[1]), static_cast<float>(pos[2]));
             if (hasNormal)
@@ -420,11 +418,11 @@ static void ProcessMeshToItp(FbxMesh* mesh, ItpMesh::Mesh* out, int index)
             size_t index = 0;
             auto inMap = vertexMap.find(vert);
             if (inMap != vertexMap.end())
-            {
+            {   // found existing vertex... reuse it
                 index = inMap->second;
             }
             else
-            {
+            {   // this is a new vertex... add it to the map
                 index = vertexMap.size();
                 vertexMap[vert] = index;
                 out->verts.emplace_back(vert);
