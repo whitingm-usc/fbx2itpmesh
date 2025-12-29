@@ -605,6 +605,17 @@ static bool ReadAnimation(FbxScene* scene, FbxAnimStack* animStack, ItpMesh::Ani
     return true;
 }
 
+void PrintOptions()
+{
+    std::cout << "Usage: FBX2ITP input.fbx [options]\n";
+    std::cout << "Options:\n";
+    std::cout << "  -b          Read blend shapes\n";
+    std::cout << "  -s          Read skinning data\n";
+    std::cout << "  -a          Read animations (will not export mesh)\n";
+    std::cout << "  -r <rate>   Sample rate for animations (samples per second, default 30.0)\n";
+    std::cout << "  -h, -?      Show this help\n";
+}
+
 void ReadOptions(int argc, char** argv)
 {
     s_doBlendShapes = false;
@@ -638,6 +649,11 @@ void ReadOptions(int argc, char** argv)
             }
             ++i;
         }
+        else if (arg == "-h" || arg == "-?")
+        {
+            PrintOptions();
+            exit(0);
+        }
     }
 }
 
@@ -645,7 +661,8 @@ int main(int argc, char** argv)
 {
     if (argc < 2)
     {
-        std::cerr << "Usage: " << (argc > 0 ? argv[0] : "FBX2ITP") << " input.fbx\n";
+        std::cerr << "Error: missing input file argument.\n";
+        PrintOptions();
         return 1;
     }
     const char* inputPath = argv[1];

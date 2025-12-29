@@ -200,6 +200,7 @@ void ItpMesh::Mesh::WriteToJson(std::ofstream& ofs) const
     ofs << "\t\t\"type\": \"itpmesh\",\n";
     ofs << "\t\t\"version\" : 3\n";
     ofs << "\t},\n";
+    ofs << "\t\"skinned\": " << (format.hasSkin ? "true" : "false") << ",\n";
     ofs << "\t\"material\": \"Assets/Materials/" << name << ".itpmat\",\n";
     format.WriteToJson(ofs, 1);
     WriteVertsToJson(ofs);
