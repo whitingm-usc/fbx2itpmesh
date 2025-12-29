@@ -33,15 +33,32 @@ public:
 
     struct Bone
     {
-        struct BindPose
+        struct Pose
         {
             Quaternion rot;
             Vector3 trans;
+            void WriteToJson(std::ofstream& ofs, int indent = 3) const;
         };
         std::string name;
         int32_t parentIndex = -1;
-        BindPose bindPose;
+        Pose bindPose;
 
+        void WriteToJson(std::ofstream& ofs) const;
+    };
+
+    struct Anim
+    {
+        struct Track {
+            uint32_t boneIndex = 0;
+            std::vector<Bone::Pose> poses;
+            void WriteToJson(std::ofstream& ofs) const;
+        };
+        std::string name;
+        bool isLoop = true;
+        uint32_t frames = 0;
+        float length = 0.0f; // in seconds
+        uint32_t boneCount = 0;
+        std::vector<Track> tracks;
         void WriteToJson(std::ofstream& ofs) const;
     };
 

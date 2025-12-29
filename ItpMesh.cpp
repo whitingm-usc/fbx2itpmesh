@@ -110,12 +110,24 @@ void ItpMesh::BlendShape::WriteToJson(std::ofstream& ofs) const
     ofs << "\n}\n";
 }
 
+void ItpMesh::Bone::Pose::WriteToJson(std::ofstream& ofs, int indent) const
+{
+    std::string in = Indent(indent);
+    ofs << in << "{\n";
+    ofs << in << "\t\"rot\": [ " << rot.x << ", "
+        << rot.y << ", " << rot.z << ", "
+        << rot.w << " ],\n";
+    ofs << in << "\t\"trans\": [ " << trans.x << ", "
+        << trans.y << ", " << trans.z << " ]\n";
+    ofs << in << "}";
+}
+
 void ItpMesh::Bone::WriteToJson(std::ofstream& ofs) const
 {
     ofs << "\t\t{\n";
     ofs << "\t\t\t\"name\": \"" << name << "\",\n";
-    ofs << "\t\t\t\"parentIndex\": " << parentIndex << ",\n";
-    ofs << "\t\t\t\"bindPose\": {\n";
+    ofs << "\t\t\t\"parent\": " << parentIndex << ",\n";
+    ofs << "\t\t\t\"bindpose\": {\n";
     ofs << "\t\t\t\t\"rot\": [ " << bindPose.rot.x << ", "
         << bindPose.rot.y << ", " << bindPose.rot.z << ", "
         << bindPose.rot.w << " ],\n";
@@ -123,6 +135,56 @@ void ItpMesh::Bone::WriteToJson(std::ofstream& ofs) const
         << bindPose.trans.y << ", " << bindPose.trans.z << " ]\n";
     ofs << "\t\t\t}\n";
     ofs << "\t\t}";
+}
+
+void ItpMesh::Anim::Track::WriteToJson(std::ofstream& ofs) const
+{
+    std::string in = Indent(3);
+    ofs << in << "{\n";
+    ofs << in << "\t\"bone\": " << boneIndex << ",\n";
+    ofs << in << "\t\"transforms\": [\n";
+    if (!poses.empty())
+    {
+        poses[0].WriteToJson(ofs, 5);
+        for (size_t i = 1; i < poses.size(); ++i)
+        {
+            ofs << ",\n";
+            poses[i].WriteToJson(ofs, 5);
+        }
+    }
+    ofs << "\n" << in << "\t]\n";
+    ofs << in << "}";
+}
+
+void ItpMesh::Anim::WriteToJson(std::ofstream& ofs) const
+{
+    ofs << "{\n";
+    ofs << "\t\"metadata\": {\n";
+    ofs << "\t\t\"type\": \"itpanim\",\n";
+    ofs << "\t\t\"version\" : 2\n";
+    ofs << "\t},\n";
+    ofs << "\t\"sequence\": {\n";
+    ofs << "\t\t\"loop\": ";
+    if (isLoop)
+        ofs << "true,\n";
+    else
+        ofs << "false,\n";
+    ofs << "\t\t\"frames\": " << frames << ",\n";
+    ofs << "\t\t\"length\": " << length << ",\n";
+    ofs << "\t\t\"bonecount\": " << boneCount << ",\n";
+    ofs << "\t\t\"tracks\": [\n";
+    if (!tracks.empty())
+    {
+        tracks[0].WriteToJson(ofs);
+        for (size_t i = 1; i < tracks.size(); ++i)
+        {
+            ofs << ",\n";
+            tracks[i].WriteToJson(ofs);
+        }
+    }
+    ofs << "\n\t\t]\n";
+    ofs << "\t}\n";
+    ofs << "}\n";
 }
 
 void ItpMesh::Mesh::Triangle::WriteToJson(std::ofstream& ofs) const
@@ -138,7 +200,7 @@ void ItpMesh::Mesh::WriteToJson(std::ofstream& ofs) const
     ofs << "\t\t\"type\": \"itpmesh\",\n";
     ofs << "\t\t\"version\" : 3\n";
     ofs << "\t},\n";
-    ofs << "\t\"material\" : \"Assets/Materials/" << name << ".itpmat\",\n";
+    ofs << "\t\"material\": \"Assets/Materials/" << name << ".itpmat\",\n";
     format.WriteToJson(ofs, 1);
     WriteVertsToJson(ofs);
     WriteIndicesToJson(ofs);
@@ -216,6 +278,7 @@ void ItpMesh::Mesh::WriteSkelToJson(std::ofstream& ofs) const
         for (size_t i = 1; i < bones.size(); ++i)
         {
             ofs << ",\n";
+            //ofs << "\t\"index\": " << i << ",\n";
             bones[i].WriteToJson(ofs);
         }
     }

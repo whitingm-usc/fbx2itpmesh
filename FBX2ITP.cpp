@@ -14,8 +14,10 @@
 #include <vector>
 #include <algorithm>
 
-static bool s_doBlendShapes = true;
-static bool s_doSkinning = true;
+static bool s_doBlendShapes = false;
+static bool s_doSkinning = false;
+static bool s_doAnimation = false;
+static float s_sampleRate = 30.0f; // samples per second (default)
 
 
 // Read blendshapes (blend shape deformers) from an FbxMesh.
@@ -40,21 +42,25 @@ static void ReadBlendShapes(FbxMesh* mesh, ItpMesh::Mesh* out)
     for (int d = 0; d < deformerCount; ++d)
     {
         FbxBlendShape* blendShape = static_cast<FbxBlendShape*>(mesh->GetDeformer(d, FbxDeformer::eBlendShape));
-        if (!blendShape) continue;
+        if (!blendShape) 
+            continue;
 
         int channelCount = blendShape->GetBlendShapeChannelCount();
         for (int c = 0; c < channelCount; ++c)
         {
             FbxBlendShapeChannel* channel = blendShape->GetBlendShapeChannel(c);
-            if (!channel) continue;
+            if (!channel) 
+                continue;
 
             int targetCount = channel->GetTargetShapeCount();
-            if (targetCount == 0) continue;
+            if (targetCount == 0) 
+                continue;
 
             for (int t = 0; t < targetCount; ++t)
             {
                 FbxShape* shape = channel->GetTargetShape(t);
-                if (!shape) continue;
+                if (!shape) 
+                    continue;
 
                 FbxVector4* shapeControlPoints = shape->GetControlPoints();
                 int shapeCount = shape->GetControlPointsCount();
@@ -130,6 +136,84 @@ static void ReadBlendShapes(FbxMesh* mesh, ItpMesh::Mesh* out)
     } // deformer
 }
 
+static void GetAnimBones(FbxMesh* mesh, 
+    std::vector<FbxNode*>& boneNodes,
+    std::vector<FbxAMatrix>& boneBindMatrices,
+    std::unordered_map<std::string, uint8_t>& boneNameToIndex,
+    std::vector<std::vector<std::pair<uint8_t, float>>>& cpInfluences
+    )
+{
+    // Collect skeleton nodes in scene
+    // find topmost root for this mesh and collect skeleton nodes under it
+    FbxNode* root = mesh->GetNode();
+    while (root->GetParent())
+        root = root->GetParent();
+    FbxHelper::CollectSkeletonNodes(root, boneNodes);
+    // make a map of bone name to bone index
+    for (size_t i = 0; i < boneNodes.size(); ++i)
+    {
+        FbxNode* skelNode = boneNodes[i];
+        std::string skelName = skelNode->GetName();
+        boneNameToIndex[skelName] = static_cast<uint8_t>(i);
+    }
+    boneBindMatrices.resize(boneNodes.size());
+
+    // go thru all the deformers looking for skin deformers
+    int skinDeformerCount = mesh->GetDeformerCount(FbxDeformer::eSkin);
+    int controlPointCount = mesh->GetControlPointsCount();
+    cpInfluences.resize(static_cast<size_t>(controlPointCount));
+    for (int s = 0; s < skinDeformerCount; ++s)
+    {
+        FbxSkin* skin = static_cast<FbxSkin*>(mesh->GetDeformer(s, FbxDeformer::eSkin));
+        if (!skin) 
+            continue;
+
+        int clusterCount = skin->GetClusterCount();
+        for (int c = 0; c < clusterCount; ++c)
+        {
+            FbxCluster* cluster = skin->GetCluster(c);
+            if (!cluster) 
+                continue;
+
+            FbxNode* linkNode = cluster->GetLink(); // bone node
+            if (!linkNode) 
+                continue;
+
+            // this is a skinning bone
+            std::string boneName = linkNode->GetName();
+            uint8_t boneIndex = boneNameToIndex[boneName];
+
+            // Get the link (bone) bind matrix and the mesh bind matrix from the cluster
+            FbxAMatrix linkBindMat;    // transform of the link (bone) at bind pose (global)
+            FbxAMatrix meshBindMat;    // transform of the mesh at bind pose (global)
+
+            // cluster API fills these
+            cluster->GetTransformLinkMatrix(linkBindMat); // link in bind pose
+            cluster->GetTransformMatrix(meshBindMat);     // mesh in bind pose
+
+            // Convert link into mesh-local bind transform:
+            // localBind = linkBind * inverse(meshBind)
+//            FbxAMatrix localBind = linkBindMat * meshBindMat.Inverse();
+            //boneBindMatrices[boneIndex] = localBind;
+
+            // get the bone indices and weights for this vertex
+            int indexCount = cluster->GetControlPointIndicesCount();
+            int* indices = cluster->GetControlPointIndices();
+            double* weights = cluster->GetControlPointWeights();
+            for (int k = 0; k < indexCount; ++k)
+            {
+                int cpIndex = indices[k];
+                float w = static_cast<float>(weights[k]);
+                if (w <= 0.0f)
+                    continue;
+                if (cpIndex < 0 || cpIndex >= controlPointCount)
+                    continue;
+                cpInfluences[static_cast<size_t>(cpIndex)].emplace_back(boneIndex, w);
+            }
+        }
+    }
+}
+
 // Read skinning info and also populate the mesh bones (names + bind poses + parent indices).
 // Returns true if any skinning data was found.
 static bool ReadSkin(FbxMesh* mesh,
@@ -137,106 +221,23 @@ static bool ReadSkin(FbxMesh* mesh,
     std::vector<std::array<uint8_t, 4>>& ctrlWeights,
     std::vector<ItpMesh::Bone>& outBones)
 {
-    int skinDeformerCount = mesh->GetDeformerCount(FbxDeformer::eSkin);
-    int controlPointCount = mesh->GetControlPointsCount();
+    int vertexCount = mesh->GetControlPointsCount();
 
     // Per-control-point list of (boneIndex, weight)
     std::vector<std::vector<std::pair<uint8_t, float>>> cpInfluences;
-    cpInfluences.resize(static_cast<size_t>(controlPointCount));
-
     // Map bone (link) name -> small integer index (uint8_t)
     std::unordered_map<std::string, uint8_t> boneNameToIndex;
-    uint32_t nextBoneIndex = 0;
-
     // Keep arrays for node pointers and bind matrices indexed by boneIndex
     std::vector<FbxNode*> boneNodes;
     std::vector<FbxAMatrix> boneBindMatrices;
+    GetAnimBones(mesh, boneNodes, boneBindMatrices, boneNameToIndex, cpInfluences);
+    size_t numBones = boneNodes.size();
 
-    for (int s = 0; s < skinDeformerCount; ++s)
-    {
-        FbxSkin* skin = static_cast<FbxSkin*>(mesh->GetDeformer(s, FbxDeformer::eSkin));
-        if (!skin) continue;
-
-        int clusterCount = skin->GetClusterCount();
-        for (int c = 0; c < clusterCount; ++c)
-        {
-            FbxCluster* cluster = skin->GetCluster(c);
-            if (!cluster) continue;
-
-            FbxNode* linkNode = cluster->GetLink(); // bone node
-            if (!linkNode) continue;
-
-            std::string boneName = linkNode->GetName();
-            uint8_t boneIndex = 0;
-            auto it = boneNameToIndex.find(boneName);
-            if (it == boneNameToIndex.end())
-            {
-                if (nextBoneIndex > 255)
-                {
-                    std::cerr << "Warning: too many bones - bone '" << boneName << "' ignored\n";
-                    continue;
-                }
-                boneIndex = static_cast<uint8_t>(nextBoneIndex);
-                boneNameToIndex[boneName] = boneIndex;
-                ++nextBoneIndex;
-
-                boneNodes.resize(nextBoneIndex);
-                boneBindMatrices.resize(nextBoneIndex);
-                boneNodes[boneIndex] = linkNode;
-
-                // Get the link (bone) bind matrix and the mesh bind matrix from the cluster
-                FbxAMatrix linkBindMat;    // transform of the link (bone) at bind pose (global)
-                FbxAMatrix meshBindMat;    // transform of the mesh at bind pose (global)
-
-                // cluster API fills these
-                cluster->GetTransformLinkMatrix(linkBindMat); // link in bind pose
-                cluster->GetTransformMatrix(meshBindMat);     // mesh in bind pose
-
-                // Convert link into mesh-local bind transform:
-                // localBind = linkBind * inverse(meshBind)
-                FbxAMatrix localBind = linkBindMat * meshBindMat.Inverse();
-
-                boneBindMatrices[boneIndex] = localBind;
-            }
-            else
-            {
-                boneIndex = it->second;
-
-                // If not assigned previously, attempt to populate bind matrix similarly
-                FbxAMatrix linkBindMat, meshBindMat;
-                cluster->GetTransformLinkMatrix(linkBindMat);
-                cluster->GetTransformMatrix(meshBindMat);
-                FbxAMatrix localBind = linkBindMat * meshBindMat.Inverse();
-
-                // naive check: only overwrite if currently identity translation
-                FbxVector4 curT = boneBindMatrices[boneIndex].GetT();
-                if (curT[0] == 0.0 && curT[1] == 0.0 && curT[2] == 0.0)
-                    boneBindMatrices[boneIndex] = localBind;
-            }
-
-            int indexCount = cluster->GetControlPointIndicesCount();
-            int* indices = cluster->GetControlPointIndices();
-            double* weights = cluster->GetControlPointWeights();
-
-            for (int k = 0; k < indexCount; ++k)
-            {
-                int cpIndex = indices[k];
-                float w = static_cast<float>(weights[k]);
-                if (w <= 0.0f) 
-                    continue;
-                if (cpIndex < 0 || cpIndex >= controlPointCount) 
-                    continue;
-                cpInfluences[static_cast<size_t>(cpIndex)].emplace_back(boneIndex, w);
-            }
-        }
-    }
-
-    // Pack up to 4 strongest influences per control point (unchanged existing behavior)
-    ctrlBones.resize(static_cast<size_t>(controlPointCount));
-    ctrlWeights.resize(static_cast<size_t>(controlPointCount));
-
+    // Pack up to 4 strongest influences per vertex
+    ctrlBones.resize(static_cast<size_t>(vertexCount));
+    ctrlWeights.resize(static_cast<size_t>(vertexCount));
     bool anySkin = false;
-    for (int i = 0; i < controlPointCount; ++i)
+    for (int i = 0; i < vertexCount; ++i)
     {
         auto& inf = cpInfluences[static_cast<size_t>(i)];
         std::array<uint8_t, 4> b = { 0,0,0,0 };
@@ -244,15 +245,16 @@ static bool ReadSkin(FbxMesh* mesh,
 
         if (!inf.empty())
         {
+            // sort influences by weight descending
             std::sort(inf.begin(), inf.end(), [](const std::pair<uint8_t, float>& a, const std::pair<uint8_t, float>& b) {
                 return a.second > b.second;
                 });
 
+            // rescale weights to [0, 255] range
             float total = 0.0f;
             size_t take = std::min<size_t>(4, inf.size());
             for (size_t j = 0; j < take; ++j)
                 total += inf[j].second;
-
             if (total > 0.0f)
             {
                 int acc = 0;
@@ -270,7 +272,7 @@ static bool ReadSkin(FbxMesh* mesh,
                     w[j] = static_cast<uint8_t>(byteVal);
                     acc += byteVal;
                 }
-                anySkin = true;
+                anySkin = true; // found at least one skinned vertex
             }
         }
 
@@ -280,8 +282,8 @@ static bool ReadSkin(FbxMesh* mesh,
 
     // Build outBones entries (name, parentIndex, bindPose) using boneBindMatrices
     outBones.clear();
-    outBones.resize(nextBoneIndex);
-    for (uint32_t bi = 0; bi < nextBoneIndex; ++bi)
+    outBones.resize(numBones);
+    for (uint32_t bi = 0; bi < numBones; ++bi)
     {
         ItpMesh::Bone bone;
         FbxNode* node = nullptr;
@@ -295,23 +297,20 @@ static bool ReadSkin(FbxMesh* mesh,
             // find parent in the same bone map
             FbxNode* parent = node->GetParent();
             int parentIndex = -1;
-            while (parent)
+            if (parent)
             {
                 std::string parentName = parent->GetName();
                 auto pit = boneNameToIndex.find(parentName);
                 if (pit != boneNameToIndex.end())
                 {
                     parentIndex = static_cast<int>(pit->second);
-                    break;
                 }
-                parent = parent->GetParent();
             }
             bone.parentIndex = parentIndex;
 
-            // boneBindMatrices[bi] currently holds the bone global bind transform expressed in mesh space.
             // To get the bone's local transform (relative to its parent) compute:
             // local = inverse(parentGlobal) * boneGlobal
-            FbxAMatrix boneGlobal = boneBindMatrices[bi];
+            FbxAMatrix boneGlobal = boneBindMatrices[bi] = node->EvaluateGlobalTransform();
             FbxAMatrix localBind;
             if (bone.parentIndex >= 0 && static_cast<size_t>(bone.parentIndex) < boneBindMatrices.size())
             {
@@ -325,26 +324,10 @@ static bool ReadSkin(FbxMesh* mesh,
             }
 
             FbxVector4 t = localBind.GetT();
-            FbxVector4 r = localBind.GetR(); // Euler angles in degrees (X, Y, Z)
-
             bone.bindPose.trans = Vector3(static_cast<float>(t[0]), static_cast<float>(t[1]), static_cast<float>(t[2]));
-
-            auto ToRadians = [](double deg) { return static_cast<float>(deg * (3.14159265358979323846 / 180.0)); };
-            float pitch = ToRadians(r[0]); // X
-            float yaw = ToRadians(r[1]);   // Y
-            float roll = ToRadians(r[2]);  // Z
-
-            float cy = cosf(yaw * 0.5f);
-            float sy = sinf(yaw * 0.5f);
-            float cp = cosf(pitch * 0.5f);
-            float sp = sinf(pitch * 0.5f);
-            float cr = cosf(roll * 0.5f);
-            float sr = sinf(roll * 0.5f);
-
-            bone.bindPose.rot.x = sr * cp * cy - cr * sp * sy;
-            bone.bindPose.rot.y = cr * sp * cy + sr * cp * sy;
-            bone.bindPose.rot.z = cr * cp * sy - sr * sp * cy;
-            bone.bindPose.rot.w = cr * cp * cy + sr * sp * sy;
+            FbxQuaternion q = localBind.GetQ();
+            bone.bindPose.rot = Quaternion(static_cast<float>(q[0]), static_cast<float>(q[1]), static_cast<float>(q[2]),
+                static_cast<float>(q[3]));
         }
         else
         {
@@ -537,10 +520,105 @@ static void WriteAllMesh(FbxNode* node, int& index)
     }
 }
 
+/// Read a single animation stack and sample it at the provided sampleRate (samples per second).
+/// Fills an ItpMesh::Anim with tracks for each skeleton node discovered in the scene.
+/// Returns true on success.
+static bool ReadAnimation(FbxScene* scene, FbxAnimStack* animStack, ItpMesh::Anim* outAnim, float sampleRate)
+{
+    if (!scene || !animStack || !outAnim || sampleRate <= 0.0f)
+        return false;
+
+    // Set this animation stack active for evaluation
+    scene->SetCurrentAnimationStack(animStack);
+
+    // Get time span for the stack
+    FbxTimeSpan span = animStack->GetLocalTimeSpan();
+    FbxTime startTime = span.GetStart();
+    FbxTime endTime = span.GetStop();
+
+    double startSec = startTime.GetSecondDouble();
+    double endSec = endTime.GetSecondDouble();
+    double length = endSec - startSec;
+    if (length < 0.0)
+        length = 0.0;
+
+    // Collect skeleton nodes in scene
+    // TODO change this to use only the nodes that are in the skeleton
+    std::vector<FbxNode*> skeletonNodes;
+    FbxHelper::CollectSkeletonNodes(scene->GetRootNode(), skeletonNodes);
+    if (skeletonNodes.empty())
+        return false;
+
+    // Prepare tracks
+    outAnim->name = animStack->GetName();
+    outAnim->isLoop = true; // preserving simple default; FBX doesn't directly mark loop here
+    uint32_t frames = static_cast<uint32_t>(std::floor(length * sampleRate)) + 1u;
+    outAnim->frames = frames;
+    outAnim->length = static_cast<float>(length);
+    outAnim->boneCount = static_cast<uint32_t>(skeletonNodes.size());
+    outAnim->tracks.clear();
+    outAnim->tracks.resize(skeletonNodes.size());
+
+    for (size_t bi = 0; bi < skeletonNodes.size(); ++bi)
+    {
+        ItpMesh::Anim::Track track;
+        track.boneIndex = static_cast<uint32_t>(bi);
+        track.poses.reserve(frames);
+        outAnim->tracks[bi] = std::move(track);
+    }
+
+    // sampling step in seconds
+    double stepSec = 1.0 / static_cast<double>(sampleRate);
+
+    for (uint32_t f = 0; f < frames; ++f)
+    {
+        double curSec = startSec + static_cast<double>(f) * stepSec;
+        FbxTime t;
+        t.SetSecondDouble(curSec);
+
+        for (size_t bi = 0; bi < skeletonNodes.size(); ++bi)
+        {
+            FbxNode* node = skeletonNodes[bi];
+
+            // Evaluate global transforms for node and its parent at time t,
+            // then compute local = inverse(parentGlobal) * global.
+            // This is more robust than using EvaluateLocalTransform() directly
+            // when FBX files have pivots/inheritance or animations applied in global space.
+            FbxAMatrix global = node->EvaluateGlobalTransform(t);
+
+            FbxAMatrix local;
+            FbxNode* parent = node->GetParent();
+            if (parent)
+            {
+                FbxAMatrix parentGlobal = parent->EvaluateGlobalTransform(t);
+                local = parentGlobal.Inverse() * global;
+            }
+            else
+            {
+                local = global;
+            }
+
+            FbxVector4 ft = local.GetT();
+            FbxQuaternion fq = local.GetQ(); // quaternion rotation
+            ItpMesh::Bone::Pose pose;
+            pose.trans = Vector3(static_cast<float>(ft[0]), static_cast<float>(ft[1]), static_cast<float>(ft[2]));
+            pose.rot.x = static_cast<float>(fq[0]);
+            pose.rot.y = static_cast<float>(fq[1]);
+            pose.rot.z = static_cast<float>(fq[2]);
+            pose.rot.w = static_cast<float>(fq[3]);
+
+            outAnim->tracks[bi].poses.push_back(pose);
+        }
+    }
+
+    return true;
+}
+
 void ReadOptions(int argc, char** argv)
 {
     s_doBlendShapes = false;
     s_doSkinning = false;
+    s_doAnimation = false;
     // For simplicity, only check for flags in arguments
     for (int i = 2; i < argc; ++i)
     {
@@ -552,6 +630,22 @@ void ReadOptions(int argc, char** argv)
         else if (arg == "-s")
         {
             s_doSkinning = true;
+        }
+        else if (arg == "-a")
+        {
+            s_doAnimation = true;
+        }
+        else if (arg == "-r" && i + 1 < argc) // sample rate
+        {
+            try {
+                s_sampleRate = static_cast<float>(std::stof(argv[i + 1]));
+                if (s_sampleRate <= 0.0f)
+                    s_sampleRate = 30.0f;
+            }
+            catch (...) {
+                s_sampleRate = 30.0f;
+            }
+            ++i;
         }
     }
 }
@@ -600,11 +694,47 @@ int main(int argc, char** argv)
     }
     importer->Destroy();
 
-    FbxGeometryConverter converter(sdkManager);
-    converter.Triangulate(scene, true); // The 'true' parameter ensures original nodes are replaced.
+    if (s_doAnimation)
+    {
+        // Write animations: iterate all animation stacks and sample them at s_sampleRate
+        int animStackCount = scene->GetSrcObjectCount<FbxAnimStack>();
+        for (int a = 0; a < animStackCount; ++a)
+        {
+            FbxAnimStack* stack = scene->GetSrcObject<FbxAnimStack>(a);
+            if (!stack)
+                continue;
 
-    int index = 0;
-    WriteAllMesh(scene->GetRootNode(), index);
+            ItpMesh::Anim anim;
+            if (ReadAnimation(scene, stack, &anim, s_sampleRate))
+            {
+                std::cout << "Writing animation: " << anim.name << " (frames: " << anim.frames << ", length: " << anim.length << "s)\n";
+                std::string outputPath = anim.name + ".itpanim2";
+                std::ofstream ofs(outputPath, std::ofstream::out | std::ofstream::trunc);
+                if (!ofs.is_open())
+                {
+                    std::cerr << "Failed to open output file: " << outputPath << "\n";
+                }
+                else
+                {
+                    ofs << std::showpoint;
+                    anim.WriteToJson(ofs);
+                    ofs.close();
+                }
+            }
+            else
+            {
+                std::cout << "Skipping animation stack: " << (stack ? stack->GetName() : "<null>") << " (no skeleton or failed to sample)\n";
+            }
+        }
+    }
+    else
+    {
+        FbxGeometryConverter converter(sdkManager);
+        converter.Triangulate(scene, true); // The 'true' parameter ensures original nodes are replaced.
+
+        int index = 0;
+        WriteAllMesh(scene->GetRootNode(), index);
+    }
 
     // Cleanup
     sdkManager->Destroy();

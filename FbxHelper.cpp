@@ -86,4 +86,20 @@
     return false;
 }
 
+/// Helper: collect skeleton nodes (attribute type eSkeleton) under root
+/*static*/ void FbxHelper::CollectSkeletonNodes(FbxNode* node, std::vector<FbxNode*>& outNodes)
+{
+    if (!node) 
+        return;
+    FbxNodeAttribute* attr = node->GetNodeAttribute();
+    if (attr && attr->GetAttributeType() == FbxNodeAttribute::eSkeleton)
+    {
+        outNodes.push_back(node);
+    }
+    for (int i = 0; i < node->GetChildCount(); ++i)
+        CollectSkeletonNodes(node->GetChild(i), outNodes);
+}
+
+
+
 
