@@ -97,25 +97,23 @@ static void ReadBlendShapes(FbxMesh* mesh, ItpMesh::Mesh* out)
                     uint32_t baseIndex = out->vertexMap[static_cast<uint32_t>(i)][0];
                     VertexData& baseVert = out->verts[baseIndex];
                     VertexData vert;
-                    float dx = static_cast<float>(shapeControlPoints[i][0]);
-                    float dy = static_cast<float>(shapeControlPoints[i][1]);
-                    float dz = static_cast<float>(shapeControlPoints[i][2]);
-                    vert.pos = Vector3(dx, dy, dz) - baseVert.pos;
+                    vert.pos = FbxHelper::TranformVector3(shapeControlPoints[i]);
+                    vert.pos -= baseVert.pos;
 
                     if (bs.format.hasNormal)
                     {
                         int idx = (elemNormal->GetReferenceMode() == FbxGeometryElement::eDirect) ?
                             i : elemNormal->GetIndexArray().GetAt(i);
                         FbxVector4 n = elemNormal->GetDirectArray().GetAt(idx);
-                        vert.norm = Vector3(static_cast<float>(n[0]), static_cast<float>(n[1]), static_cast<float>(n[2]));
+                        vert.norm = FbxHelper::TranformVector3(n);
                         vert.norm -= baseVert.norm;
                     }
                     if (bs.format.hasTan)
                     {
                         int idx = (elemTangent->GetReferenceMode() == FbxGeometryElement::eDirect) ?
                             i : elemTangent->GetIndexArray().GetAt(i);
-                        FbxVector4 n = elemTangent->GetDirectArray().GetAt(idx);
-                        vert.tan = Vector3(static_cast<float>(n[0]), static_cast<float>(n[1]), static_cast<float>(n[2]));
+                        FbxVector4 t = elemTangent->GetDirectArray().GetAt(idx);
+                        vert.tan = FbxHelper::TranformVector3(t);
                         vert.tan -= baseVert.tan;
                     }
 
@@ -318,10 +316,9 @@ static bool ReadSkin(FbxMesh* mesh,
             }
 
             FbxVector4 t = localBind.GetT();
-            bone.bindPose.trans = Vector3(static_cast<float>(t[0]), static_cast<float>(t[1]), static_cast<float>(t[2]));
+            bone.bindPose.trans = FbxHelper::TranformVector3(t);
             FbxQuaternion q = localBind.GetQ();
-            bone.bindPose.rot = Quaternion(static_cast<float>(q[0]), static_cast<float>(q[1]), static_cast<float>(q[2]),
-                static_cast<float>(q[3]));
+            bone.bindPose.rot = FbxHelper::TranformQuaternion(q);
         }
         else
         {
@@ -378,13 +375,13 @@ static void ProcessMeshToItp(FbxMesh* mesh, ItpMesh::Mesh* out, int index)
             FbxVector4 tangent;
             bool hasTangent = FbxHelper::GetTangentAt(mesh, p, v, tangent);
 
-            vert.pos = Vector3(static_cast<float>(pos[0]), static_cast<float>(pos[1]), static_cast<float>(pos[2]));
+            vert.pos = FbxHelper::TranformVector3(pos);
             if (hasNormal)
-                vert.norm = Vector3(static_cast<float>(normal[0]), static_cast<float>(normal[1]), static_cast<float>(normal[2]));
+                vert.norm = FbxHelper::TranformVector3(normal);
             else
                 vert.norm = Vector3(0.0f, 0.0f, 0.0f);
             if (hasTangent)
-                vert.tan = Vector3(static_cast<float>(tangent[0]), static_cast<float>(tangent[1]), static_cast<float>(tangent[2]));
+                vert.tan = FbxHelper::TranformVector3(tangent);
             else
                 vert.tan = Vector3(0.0f, 0.0f, 0.0f);
             if (hasUV)
@@ -428,8 +425,7 @@ static void ProcessMeshToItp(FbxMesh* mesh, ItpMesh::Mesh* out, int index)
                 out->verts.emplace_back(vert);
                 out->vertexMap[static_cast<uint32_t>(ctrlPointIndex)].push_back(static_cast<uint32_t>(index));
             }
-            // reverse the winding order
-            out->indices[p].index[2 - v] = static_cast<uint32_t>(index);
+            out->indices[p].index[v] = static_cast<uint32_t>(index);
         }
     }
 
@@ -599,11 +595,8 @@ static bool ReadAnimation(FbxScene* scene, FbxAnimStack* animStack, ItpMesh::Ani
             FbxVector4 ft = local.GetT();
             FbxQuaternion fq = local.GetQ(); // quaternion rotation
             ItpMesh::Bone::Pose pose;
-            pose.trans = Vector3(static_cast<float>(ft[0]), static_cast<float>(ft[1]), static_cast<float>(ft[2]));
-            pose.rot.x = static_cast<float>(fq[0]);
-            pose.rot.y = static_cast<float>(fq[1]);
-            pose.rot.z = static_cast<float>(fq[2]);
-            pose.rot.w = static_cast<float>(fq[3]);
+            pose.trans = FbxHelper::TranformVector3(ft);
+            pose.rot = FbxHelper::TranformQuaternion(fq);
 
             outAnim->tracks[bi].poses.push_back(pose);
         }
