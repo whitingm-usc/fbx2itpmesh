@@ -74,7 +74,7 @@ static void ReadBlendShapes(FbxMesh* mesh, ItpMesh::Mesh* out)
                 }
 
                 ItpMesh::BlendShape bs;
-                bs.name = std::string(channel->GetName());
+                bs.name = FbxHelper::GetMeshName(mesh) + "_" + std::string(channel->GetName());
                 if (targetCount > 1)
                     bs.name += "_target" + std::to_string(t);
 
@@ -338,8 +338,7 @@ static void ProcessMeshToItp(FbxMesh* mesh, ItpMesh::Mesh* out, int index)
 {
     if (!mesh)
         return;
-    FbxNode* node = mesh->GetNode();
-    out->name = node ? node->GetName() : "mesh_" + std::to_string(index);
+    out->name = FbxHelper::GetMeshName(mesh, index);
 
     fbxsdk::FbxGeometryElementNormal* elemN = mesh->GetElementNormal(0);
     out->format.hasNormal = (elemN != nullptr);
@@ -537,7 +536,6 @@ static bool ReadAnimation(FbxScene* scene, FbxAnimStack* animStack, ItpMesh::Ani
         length = 0.0;
 
     // Collect skeleton nodes in scene
-    // TODO change this to use only the nodes that are in the skeleton
     std::vector<FbxNode*> skeletonNodes;
     FbxHelper::CollectSkeletonNodes(scene->GetRootNode(), skeletonNodes);
     if (skeletonNodes.empty())

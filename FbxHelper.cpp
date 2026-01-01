@@ -102,13 +102,20 @@
 
 /*static*/ Vector3 FbxHelper::TranformVector3(const FbxVector4& vec)
 {
-    return Vector3(static_cast<float>(-vec[0]), static_cast<float>(vec[1]), static_cast<float>(vec[2]));
+    // X becomes Y, Y becomes Z, Z becomes X
+    return Vector3(static_cast<float>(vec[2]), static_cast<float>(-vec[0]), static_cast<float>(vec[1]));
 }
 
 /*static*/ Quaternion FbxHelper::TranformQuaternion(const FbxQuaternion& quat)
 {
-    return Quaternion(static_cast<float>(quat[0]), static_cast<float>(-quat[1]), 
-        static_cast<float>(-quat[2]), static_cast<float>(quat[3]));
+    return Quaternion(static_cast<float>(-quat[2]), static_cast<float>(quat[0]), 
+        static_cast<float>(-quat[1]), static_cast<float>(quat[3]));
 }
 
+/*static*/ std::string FbxHelper::GetMeshName(FbxMesh* mesh, int index)
+{
+    FbxNode* node = mesh->GetNode();
+    std::string name = node ? node->GetName() : "mesh_" + std::to_string(index);
+    return name;
+}
 
