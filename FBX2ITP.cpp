@@ -286,6 +286,9 @@ static bool ReadSkin(FbxMesh* mesh,
         {
             bone.name = node->GetName();
 
+            FbxAMatrix global = node->EvaluateGlobalTransform();
+            FbxVector4 globalScale = global.GetS();
+
             // find parent in the same bone map
             FbxNode* parent = node->GetParent();
             int parentIndex = -1;
@@ -316,6 +319,9 @@ static bool ReadSkin(FbxMesh* mesh,
             }
 
             FbxVector4 t = localBind.GetT();
+            t[0] *= globalScale[0];
+            t[1] *= globalScale[1];
+            t[2] *= globalScale[2];
             bone.bindPose.trans = FbxHelper::TranformVector3(t);
             FbxQuaternion q = localBind.GetQ();
             bone.bindPose.rot = FbxHelper::TranformQuaternion(q);
@@ -358,6 +364,16 @@ static void ProcessMeshToItp(FbxMesh* mesh, ItpMesh::Mesh* out, int index)
     // create a map of unique vertices...
     // if ALL the vertex data is identical, then we can share the vertex
     std::unordered_map<VertexData, size_t> vertexMap;
+
+    // Get the node/global transform for this mesh so we apply any parent-node rotations/transforms
+    // (e.g. an eNull node named "Rig" with a 90-degree rotation).
+    FbxAMatrix meshGlobalTransform;
+    FbxNode* meshNode = mesh->GetNode();
+    if (meshNode)
+        meshGlobalTransform = meshNode->EvaluateGlobalTransform();
+    else
+        meshGlobalTransform = FbxAMatrix(); // identity
+
     for (int p = 0; p < polygonCount; ++p)
     {
         int polySize = mesh->GetPolygonSize(p);
@@ -367,6 +383,11 @@ static void ProcessMeshToItp(FbxMesh* mesh, ItpMesh::Mesh* out, int index)
 
             VertexData vert;
             FbxVector4 pos = mesh->GetControlPointAt(ctrlPointIndex);
+
+            // Transform the control point by the mesh node's global transform so parent rotations (e.g. Rig) are applied.
+            // Use w=1 for position so translation is applied.
+            FbxVector4 posGlobal = meshGlobalTransform.MultT(pos);
+
             FbxVector4 normal; 
             bool hasNormal = FbxHelper::GetNormalAt(mesh, p, v, normal);
             FbxVector2 uv;
@@ -374,15 +395,27 @@ static void ProcessMeshToItp(FbxMesh* mesh, ItpMesh::Mesh* out, int index)
             FbxVector4 tangent;
             bool hasTangent = FbxHelper::GetTangentAt(mesh, p, v, tangent);
 
-            vert.pos = FbxHelper::TranformVector3(pos);
+            vert.pos = FbxHelper::TranformVector3(posGlobal);
+
             if (hasNormal)
-                vert.norm = FbxHelper::TranformVector3(normal);
+            {
+                // Transform normals with the rotation part of the node transform; set w=0 so translation is ignored.
+                FbxVector4 n(normal[0], normal[1], normal[2], 0.0);
+                FbxVector4 nGlobal = meshGlobalTransform.MultT(n);
+                vert.norm = FbxHelper::TranformVector3(nGlobal);
+            }
             else
                 vert.norm = Vector3(0.0f, 0.0f, 0.0f);
+
             if (hasTangent)
-                vert.tan = FbxHelper::TranformVector3(tangent);
+            {
+                FbxVector4 t(tangent[0], tangent[1], tangent[2], 0.0);
+                FbxVector4 tGlobal = meshGlobalTransform.MultT(t);
+                vert.tan = FbxHelper::TranformVector3(tGlobal);
+            }
             else
                 vert.tan = Vector3(0.0f, 0.0f, 0.0f);
+
             if (hasUV)
             {
                 uv[1] = 1.0 - uv[1]; // flip V
@@ -577,11 +610,13 @@ static bool ReadAnimation(FbxScene* scene, FbxAnimStack* animStack, ItpMesh::Ani
             // This is more robust than using EvaluateLocalTransform() directly
             // when FBX files have pivots/inheritance or animations applied in global space.
             FbxAMatrix global = node->EvaluateGlobalTransform(t);
+            FbxVector4 globalScale = global.GetS();
 
             FbxAMatrix local;
             FbxNode* parent = node->GetParent();
-            if (parent)
+            if (parent && std::find(skeletonNodes.begin(), skeletonNodes.end(), parent) != skeletonNodes.end())
             {
+                FbxNodeAttribute* attr = node->GetNodeAttribute();
                 FbxAMatrix parentGlobal = parent->EvaluateGlobalTransform(t);
                 local = parentGlobal.Inverse() * global;
             }
@@ -591,6 +626,9 @@ static bool ReadAnimation(FbxScene* scene, FbxAnimStack* animStack, ItpMesh::Ani
             }
 
             FbxVector4 ft = local.GetT();
+            ft[0] *= globalScale[0];
+            ft[1] *= globalScale[1];
+            ft[2] *= globalScale[2];
             FbxQuaternion fq = local.GetQ(); // quaternion rotation
             ItpMesh::Bone::Pose pose;
             pose.trans = FbxHelper::TranformVector3(ft);
